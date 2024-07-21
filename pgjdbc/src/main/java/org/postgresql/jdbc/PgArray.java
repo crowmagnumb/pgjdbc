@@ -28,6 +28,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * <p>Array is used collect one column of query result data.</p>
@@ -504,5 +505,22 @@ public class PgArray implements Array {
     fieldString = null;
     fieldBytes = null;
     arrayList = null;
+  }
+
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
+    PgArray pgArray = (PgArray) o;
+    return Objects.equals(toString(), pgArray.toString());
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(toString());
   }
 }

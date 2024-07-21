@@ -1497,8 +1497,8 @@ public class PgConnection implements BaseConnection {
   @Override
   public Struct createStruct(String typeName, Object[] attributes) throws SQLException {
     checkClosed();
-    PgStruct struct = castNonNull(getTypeInfo().getPgStruct(typeName));
-    return struct.withAttributes(attributes);
+    PgStructDescriptor descriptor = castNonNull(getTypeInfo().getPgStructDescriptor(typeName));
+    return new PgStruct(descriptor, attributes, this);
   }
 
   @SuppressWarnings({"rawtypes", "unchecked"})

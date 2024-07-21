@@ -43,7 +43,6 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 import org.checkerframework.dataflow.qual.Pure;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.CharArrayReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -55,7 +54,6 @@ import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.URL;
 import java.net.UnknownHostException;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.Array;
 import java.sql.Blob;
@@ -83,6 +81,7 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.time.ZoneOffset;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -93,7 +92,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Stack;
 import java.util.StringTokenizer;
 import java.util.TimeZone;
 import java.util.UUID;
@@ -223,7 +221,7 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
           // compatibility. If the value is null, it doesn't really matter
           byte[] data = getRawValue(columnIndex);
           if (isBinary(columnIndex) && data != null && data.length == 5) {
-            return ByteConverter.bool(data, 3);
+            return data[4] != 0;
           }
           if (data == null || data.length == 1) {
             return getBoolean(columnIndex);
@@ -455,8 +453,7 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
     if (isBinary(i)) {
       return makeArray(oid, value);
     }
-    boolean isStruct = getSQLType(i) == Types.STRUCT;
-    return makeArray(oid, castNonNull(isStruct ? getString(i) : getFixedString(i)));
+    return makeArray(oid, getString(i));
   }
 
   @Override
@@ -496,94 +493,28 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
       return null;
     }
 
-    PgStruct struct = castNonNull(connection.getTypeInfo().getPgStruct(typeName));
-    PgStructField[] structFields = struct.getFields();
+    PgStructDescriptor descriptor = castNonNull(connection.getTypeInfo().getPgStructDescriptor(typeName));
+    PgAttribute[] pgAttributes = descriptor.pgAttributes();
 
-    int len = structFields.length;
+    int len = pgAttributes.length;
     Field[] newFields = new Field[len];
 
     boolean isBinary = isBinary(i);
 
-    Tuple structRow = isBinary ? castNonNull(fromStructBin(value)) : castNonNull(fromStruct(value));
+    Tuple structRow = isBinary ? PgCompositeTypeUtil.fromBytes(value, len) :
+        PgCompositeTypeUtil.fromString(castNonNull(getString(i)), len);
 
     Object[] attributes = new Object[len];
     try (CurrentRow.CurrentRowLock lock = currentRow.switchTo(newFields, structRow)) {
       for (int j = 0; j < len; j++) {
-        PgStructField fields = struct.getFields()[j];
-        newFields[j] = new Field(fields.getName(), fields.getOID());
+        PgAttribute attr = pgAttributes[j];
+        newFields[j] = new Field(attr.name(), attr.oid());
         newFields[j].setFormat(isBinary ? Field.BINARY_FORMAT : Field.TEXT_FORMAT);
         attributes[j] = getObject(j + 1);
       }
     }
 
-    return struct.withAttributes(attributes);
-  }
-
-  public static Tuple fromStructBin(byte[] value) {
-    ByteBuffer buffer = ByteBuffer.wrap(value);
-    int numberOfColumns = buffer.getInt();
-
-    byte[][] data = new byte[numberOfColumns][];
-    for (int i = 0; buffer.hasRemaining(); i++) {
-      int oid = buffer.getInt(); // ignore type
-      int len = buffer.getInt();
-      if (len == -1) {
-        data[i] = null;
-        continue;
-      }
-      data[i] = new byte[len];
-      buffer.get(data[i]);
-    }
-    return new Tuple(data);
-  }
-
-  public static Tuple fromStruct(byte[] value) {
-    // a struct string will always be enclosed in parentheses
-    assert value[0] == '(' && value[value.length - 1] == ')';
-
-    ArrayList<byte[]> fieldValues = new ArrayList<>();
-    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-
-    boolean inQuote = false;
-    byte[] escapeBytes = new byte[] {'\\', '"'};
-    byte b = 0;
-
-    for (int i = 1; i < value.length - 1; i++) {
-      b = value[i];
-
-      boolean isEscapeByte = false;
-      for (byte escB: escapeBytes) {
-        if (b == escB) {
-          // both " and \ are used as escape bytes
-          isEscapeByte = true;
-          break;
-        }
-      }
-
-      // " are used to quote values if necessary
-      if (b == '"' && value[i - 1] != '"' && value[i + 1] != '"') {
-        inQuote = !inQuote;
-      } else if (inQuote && isEscapeByte) {
-        while (value[i] == b) {
-          if (i % 2 == 0) {
-            // keep only every second escape byte
-            buffer.write(b);
-          }
-          i++;
-        }
-        i--; // compensate for the loop increment
-      } else if (b == ',' && !inQuote) {
-        fieldValues.add(buffer.size() == 0 ? null : buffer.toByteArray());
-        buffer.reset();
-      } else {
-        buffer.write(b);
-      }
-    }
-    // last field
-    if (b == ',' || buffer.size() > 0) {
-      fieldValues.add(buffer.size() == 0 ? null : buffer.toByteArray());
-    }
-    return new Tuple(fieldValues.toArray(new byte[fieldValues.size()][]));
+    return new PgStruct(descriptor, attributes, connection);
   }
 
   @Override
@@ -4468,8 +4399,8 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
   protected static final class CurrentRow {
     private final ResourceLock lock = new ResourceLock();
 
-    private final Stack<Field[]> fieldsStack = new Stack<>();
-    private final Stack<Tuple> rowStack = new Stack<>();
+    private final ArrayDeque<Field[]> fieldsStack = new ArrayDeque<>();
+    private final ArrayDeque<Tuple> rowStack = new ArrayDeque<>();
 
     CurrentRow(final Field[] fields) {
       this.fieldsStack.push(fields);

@@ -29,7 +29,6 @@ import java.lang.reflect.Array;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.SQLException;
@@ -71,6 +70,25 @@ final class ArrayDecoding {
 
   }
 
+  private interface FieldDecoder<E extends @NonNull Object> {
+
+    boolean supportBinary();
+
+    E parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException;
+
+    E parseValue(String stringVal, BaseConnection connection) throws SQLException;
+
+    Class<E> baseType();
+  }
+
+  public abstract static class AbstractObjectFieldDecoder<E extends @NonNull Object> implements FieldDecoder<E> {
+
+    @Override
+    public boolean supportBinary() {
+      return true;
+    }
+  }
+
   private interface ArrayDecoder<A extends @NonNull Object> {
 
     A createArray(@NonNegative int size);
@@ -82,22 +100,17 @@ final class ArrayDecoding {
     void populateFromBinary(A array, @NonNegative int index, @NonNegative int count, ByteBuffer bytes, BaseConnection connection)
         throws SQLException;
 
-    default Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
-      throw new SQLFeatureNotSupportedException();
-    }
-
     void populateFromString(A array, List<@Nullable String> strings, BaseConnection connection) throws SQLException;
-
-    default Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
-      throw new SQLFeatureNotSupportedException();
-    }
   }
 
-  private abstract static class AbstractObjectStringArrayDecoder<A extends @NonNull Object> implements ArrayDecoder<A> {
-    final Class<?> baseClazz;
+  private static class ArrayDecoderImpl<A extends @NonNull Object, E extends @NonNull Object> implements ArrayDecoder<A> {
 
-    AbstractObjectStringArrayDecoder(Class<?> baseClazz) {
-      this.baseClazz = baseClazz;
+    final Class<E> baseClazz;
+    final FieldDecoder<E> fieldDecoder;
+
+    ArrayDecoderImpl(FieldDecoder<E> fieldDecoder) {
+      this.fieldDecoder = fieldDecoder;
+      this.baseClazz = fieldDecoder.baseType();
     }
 
     /**
@@ -105,7 +118,7 @@ final class ArrayDecoding {
      */
     @Override
     public boolean supportBinary() {
-      return false;
+      return fieldDecoder.supportBinary();
     }
 
     @SuppressWarnings("unchecked")
@@ -125,41 +138,10 @@ final class ArrayDecoding {
     @Override
     public void populateFromBinary(A arr, int index, int count, ByteBuffer bytes, BaseConnection connection)
         throws SQLException {
-      throw new SQLFeatureNotSupportedException();
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void populateFromString(A arr, List<@Nullable String> strings, BaseConnection connection) throws SQLException {
-      final @Nullable Object[] array = (Object[]) arr;
-
-      for (int i = 0, j = strings.size(); i < j; i++) {
-        final String stringVal = strings.get(i);
-        array[i] = stringVal != null ? parseValue(stringVal, connection) : null;
+      if (!supportBinary()) {
+        throw new SQLFeatureNotSupportedException();
       }
-    }
 
-  }
-
-  private abstract static class AbstractObjectArrayDecoder<A extends @NonNull Object> extends AbstractObjectStringArrayDecoder<A> {
-
-    AbstractObjectArrayDecoder(Class<?> baseClazz) {
-      super(baseClazz);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public boolean supportBinary() {
-      return true;
-    }
-
-    @Override
-    public void populateFromBinary(A arr, @NonNegative int index, @NonNegative int count, ByteBuffer bytes, BaseConnection connection)
-        throws SQLException {
       final @Nullable Object[] array = (Object[]) arr;
 
       // skip through to the requested index
@@ -173,7 +155,7 @@ final class ArrayDecoding {
       for (int i = 0; i < count; i++) {
         final int length = bytes.getInt();
         if (length != -1) {
-          array[i] = parseValue(length, bytes, connection);
+          array[i] = fieldDecoder.parseValue(length, bytes, connection);
         } else {
           // explicitly set to null for reader's clarity
           array[i] = null;
@@ -181,107 +163,151 @@ final class ArrayDecoding {
       }
     }
 
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void populateFromString(A arr, List<@Nullable String> strings, BaseConnection connection) throws SQLException {
+      final @Nullable Object[] array = (Object[]) arr;
+
+      for (int i = 0, j = strings.size(); i < j; i++) {
+        final String stringVal = strings.get(i);
+        array[i] = stringVal != null ? fieldDecoder.parseValue(stringVal, connection) : null;
+      }
+    }
+
   }
 
-  private static final ArrayDecoder<Long[]> LONG_OBJ_ARRAY = new AbstractObjectArrayDecoder<Long[]>(Long.class) {
+  private static final FieldDecoder<Long> LONG_OBJ = new AbstractObjectFieldDecoder<Long>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
+    public @NonNull Long parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
       return bytes.getLong();
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public @NonNull Long parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return PgResultSet.toLong(stringVal);
+    }
+
+    @Override
+    public Class<Long> baseType() {
+      return Long.class;
     }
   };
 
-  private static final ArrayDecoder<Long[]> INT4_UNSIGNED_OBJ_ARRAY = new AbstractObjectArrayDecoder<Long[]>(
-      Long.class) {
+  private static final FieldDecoder<Long> INT4_UNSIGNED_OBJ = new AbstractObjectFieldDecoder<Long>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
+    public Long parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
       return bytes.getInt() & 0xFFFFFFFFL;
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Long parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return PgResultSet.toLong(stringVal);
+    }
+
+    @Override
+    public Class<Long> baseType() {
+      return Long.class;
     }
   };
 
-  private static final ArrayDecoder<Integer[]> INTEGER_OBJ_ARRAY = new AbstractObjectArrayDecoder<Integer[]>(
-      Integer.class) {
+  private static final FieldDecoder<Integer> INTEGER_OBJ = new AbstractObjectFieldDecoder<Integer>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
+    public Integer parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
       return bytes.getInt();
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Integer parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return PgResultSet.toInt(stringVal);
+    }
+
+    @Override
+    public Class<Integer> baseType() {
+      return Integer.class;
     }
   };
 
-  private static final ArrayDecoder<Short[]> SHORT_OBJ_ARRAY = new AbstractObjectArrayDecoder<Short[]>(Short.class) {
+  private static final FieldDecoder<Short> SHORT_OBJ = new AbstractObjectFieldDecoder<Short>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
+    public Short parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
       return bytes.getShort();
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Short parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return PgResultSet.toShort(stringVal);
+    }
+
+    @Override
+    public Class<Short> baseType() {
+      return Short.class;
     }
   };
 
-  private static final ArrayDecoder<Double[]> DOUBLE_OBJ_ARRAY = new AbstractObjectArrayDecoder<Double[]>(
-      Double.class) {
+  private static final FieldDecoder<Double> DOUBLE_OBJ = new AbstractObjectFieldDecoder<Double>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
+    public Double parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
       return bytes.getDouble();
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Double parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return PgResultSet.toDouble(stringVal);
+    }
+
+    @Override
+    public Class<Double> baseType() {
+      return Double.class;
     }
   };
 
-  private static final ArrayDecoder<Float[]> FLOAT_OBJ_ARRAY = new AbstractObjectArrayDecoder<Float[]>(Float.class) {
+  private static final FieldDecoder<Float> FLOAT_OBJ = new AbstractObjectFieldDecoder<Float>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
+    public Float parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
       return bytes.getFloat();
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Float parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return PgResultSet.toFloat(stringVal);
+    }
+
+    @Override
+    public Class<Float> baseType() {
+      return Float.class;
     }
   };
 
-  private static final ArrayDecoder<Boolean[]> BOOLEAN_OBJ_ARRAY = new AbstractObjectArrayDecoder<Boolean[]>(
-      Boolean.class) {
+  private static final FieldDecoder<Boolean> BOOLEAN_OBJ = new AbstractObjectFieldDecoder<Boolean>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
+    public Boolean parseValue(int length, ByteBuffer bytes, BaseConnection connection) {
       return bytes.get() == 1;
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Boolean parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return BooleanTypeUtil.fromString(stringVal);
+    }
+
+    @Override
+    public Class<Boolean> baseType() {
+      return Boolean.class;
     }
   };
 
-  private static final ArrayDecoder<String[]> STRING_ARRAY = new AbstractObjectArrayDecoder<String[]>(String.class) {
+  private static final FieldDecoder<String> STRING = new AbstractObjectFieldDecoder<String>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
+    public String parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
       assert bytes.hasArray();
       final byte[] byteArray = bytes.array();
       final int offset = bytes.arrayOffset() + bytes.position();
@@ -299,160 +325,166 @@ final class ArrayDecoding {
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public String parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return stringVal;
+    }
+
+    @Override
+    public Class<String> baseType() {
+      return String.class;
     }
   };
 
-  private static final ArrayDecoder<byte[][]> BYTE_ARRAY_ARRAY = new AbstractObjectArrayDecoder<byte[][]>(
-      byte[].class) {
+  private static final FieldDecoder<byte[]> BYTE_ARRAY = new AbstractObjectFieldDecoder<byte[]>() {
 
     /**
      * {@inheritDoc}
      */
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
+    public byte[] parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
       final byte[] array = new byte[length];
       bytes.get(array);
       return array;
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public byte[] parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return PGbytea.toBytes(stringVal.getBytes(StandardCharsets.US_ASCII));
     }
-  };
-
-  private static final ArrayDecoder<BigDecimal[]> BIG_DECIMAL_STRING_DECODER = new AbstractObjectStringArrayDecoder<BigDecimal[]>(
-      BigDecimal.class) {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
+    public Class<byte[]> baseType() {
+      return byte[].class;
+    }
+  };
+
+  private static final FieldDecoder<BigDecimal> BIG_DECIMAL_STRING_DECODER = new AbstractObjectFieldDecoder<BigDecimal>() {
+
+    @Override
+    public BigDecimal parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
       final byte[] numericVal = new byte[length];
       bytes.get(numericVal);
-      return ByteConverter.numeric(numericVal);
+      return (BigDecimal) ByteConverter.numeric(numericVal);
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public BigDecimal parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return PgResultSet.toBigDecimal(stringVal);
     }
-  };
-
-  private static final ArrayDecoder<String[]> STRING_ONLY_DECODER = new AbstractObjectStringArrayDecoder<String[]>(
-      String.class) {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
-      final byte[] str = new byte[length];
-      bytes.get(str);
-      try {
-        return connection.getEncoding().decode(str);
-      } catch (IOException ioe) {
-        throw new PSQLException(
-            GT.tr(
-                "Invalid character data was found.  This is most likely caused by stored data containing characters that are invalid for the character set the database was created in.  The most common example of this is storing 8bit data in a SQL_ASCII database."),
-            PSQLState.DATA_ERROR, ioe);
-      }
-    }
-
-    @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
-      return stringVal;
+    public Class<BigDecimal> baseType() {
+      return BigDecimal.class;
     }
   };
 
-  private static final ArrayDecoder<Date[]> DATE_DECODER = new AbstractObjectStringArrayDecoder<Date[]>(
-      Date.class) {
+  private static final FieldDecoder<Date> DATE_DECODER = new AbstractObjectFieldDecoder<Date>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
+    public Date parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
       final byte[] dateVal = new byte[length];
       bytes.get(dateVal);
       return connection.getTimestampUtils().toDateBin(null, dateVal);
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Date parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return connection.getTimestampUtils().toDate(null, stringVal.getBytes());
+    }
+
+    @Override
+    public Class<Date> baseType() {
+      return Date.class;
     }
   };
 
-  private static final ArrayDecoder<Time[]> TIME_DECODER = new AbstractObjectStringArrayDecoder<Time[]>(
-      Time.class) {
+  private static final FieldDecoder<Time> TIME_DECODER = new AbstractObjectFieldDecoder<Time>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
+    public Time parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
       final byte[] timeVal = new byte[length];
       bytes.get(timeVal);
       return connection.getTimestampUtils().toTimeBin(null, timeVal);
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Time parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return connection.getTimestampUtils().toTime(null, stringVal.getBytes());
+    }
+
+    @Override
+    public Class<Time> baseType() {
+      return Time.class;
     }
   };
 
-  private static final ArrayDecoder<Timestamp[]> TIMESTAMP_DECODER = new AbstractObjectStringArrayDecoder<Timestamp[]>(
-      Timestamp.class) {
+  private static final FieldDecoder<Timestamp> TIMESTAMP_DECODER = new AbstractObjectFieldDecoder<Timestamp>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
+    public Timestamp parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
       byte[] timestampVal = new byte[length];
       bytes.get(timestampVal);
       return connection.getTimestampUtils().toTimestampBin(null, timestampVal, false);
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Timestamp parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return connection.getTimestampUtils().toTimestamp(null, stringVal.getBytes());
+    }
+
+    @Override
+    public Class<Timestamp> baseType() {
+      return Timestamp.class;
     }
   };
 
-  private static final ArrayDecoder<Timestamp[]> TIMESTAMPZ_DECODER = new AbstractObjectStringArrayDecoder<Timestamp[]>(
-      Timestamp.class) {
+  private static final FieldDecoder<Timestamp> TIMESTAMPZ_DECODER = new AbstractObjectFieldDecoder<Timestamp>() {
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
+    public Timestamp parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
       byte[] timestampVal = new byte[length];
       bytes.get(timestampVal);
       return connection.getTimestampUtils().toTimestampBin(null, timestampVal, true);
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
+    public Timestamp parseValue(String stringVal, BaseConnection connection) throws SQLException {
       return TIMESTAMP_DECODER.parseValue(stringVal, connection);
+    }
+
+    @Override
+    public Class<Timestamp> baseType() {
+      return Timestamp.class;
     }
   };
 
   /**
-   * Maps from base type oid to {@link ArrayDecoder} capable of processing
+   * Maps from base type oid to {@link FieldDecoder} capable of processing
    * entries.
    */
   @SuppressWarnings("rawtypes")
-  private static final Map<Integer, ArrayDecoder> OID_TO_DECODER = new HashMap<>(
-      (int) (21 / .75) + 1);
+  private static final Map<Integer, FieldDecoder> OID_TO_DECODER = new HashMap<>(
+      (int) (22 / .75) + 1);
 
   static {
-    OID_TO_DECODER.put(Oid.OID, INT4_UNSIGNED_OBJ_ARRAY);
-    OID_TO_DECODER.put(Oid.INT8, LONG_OBJ_ARRAY);
-    OID_TO_DECODER.put(Oid.INT4, INTEGER_OBJ_ARRAY);
-    OID_TO_DECODER.put(Oid.INT2, SHORT_OBJ_ARRAY);
-    OID_TO_DECODER.put(Oid.MONEY, DOUBLE_OBJ_ARRAY);
-    OID_TO_DECODER.put(Oid.FLOAT8, DOUBLE_OBJ_ARRAY);
-    OID_TO_DECODER.put(Oid.FLOAT4, FLOAT_OBJ_ARRAY);
-    OID_TO_DECODER.put(Oid.TEXT, STRING_ARRAY);
-    OID_TO_DECODER.put(Oid.VARCHAR, STRING_ARRAY);
-    // 42.2.x decodes jsonb array as String rather than PGobject
-    OID_TO_DECODER.put(Oid.JSONB, STRING_ONLY_DECODER);
-    OID_TO_DECODER.put(Oid.BIT, BOOLEAN_OBJ_ARRAY);
-    OID_TO_DECODER.put(Oid.BOOL, BOOLEAN_OBJ_ARRAY);
-    OID_TO_DECODER.put(Oid.BYTEA, BYTE_ARRAY_ARRAY);
+    OID_TO_DECODER.put(Oid.OID, INT4_UNSIGNED_OBJ);
+    OID_TO_DECODER.put(Oid.INT8, LONG_OBJ);
+    OID_TO_DECODER.put(Oid.INT4, INTEGER_OBJ);
+    OID_TO_DECODER.put(Oid.INT2, SHORT_OBJ);
+    OID_TO_DECODER.put(Oid.MONEY, DOUBLE_OBJ);
+    OID_TO_DECODER.put(Oid.FLOAT8, DOUBLE_OBJ);
+    OID_TO_DECODER.put(Oid.FLOAT4, FLOAT_OBJ);
+    OID_TO_DECODER.put(Oid.TEXT, STRING);
+    OID_TO_DECODER.put(Oid.VARCHAR, STRING);
+    // 42.2.x decodes jsonb array element as String rather than PGobject
+    OID_TO_DECODER.put(Oid.JSONB, STRING);
+    OID_TO_DECODER.put(Oid.BIT, BOOLEAN_OBJ);
+    OID_TO_DECODER.put(Oid.BOOL, BOOLEAN_OBJ);
+    OID_TO_DECODER.put(Oid.BYTEA, BYTE_ARRAY);
     OID_TO_DECODER.put(Oid.NUMERIC, BIG_DECIMAL_STRING_DECODER);
-    OID_TO_DECODER.put(Oid.BPCHAR, STRING_ONLY_DECODER);
-    OID_TO_DECODER.put(Oid.CHAR, STRING_ONLY_DECODER);
-    OID_TO_DECODER.put(Oid.JSON, STRING_ONLY_DECODER);
+    OID_TO_DECODER.put(Oid.BPCHAR, STRING);
+    OID_TO_DECODER.put(Oid.CHAR, STRING);
+    OID_TO_DECODER.put(Oid.JSON, STRING);
     OID_TO_DECODER.put(Oid.DATE, DATE_DECODER);
     OID_TO_DECODER.put(Oid.TIME, TIME_DECODER);
     OID_TO_DECODER.put(Oid.TIMETZ, TIME_DECODER);
@@ -461,13 +493,16 @@ final class ArrayDecoding {
   }
 
   @SuppressWarnings("rawtypes")
-  private static final class ArrayAssistantObjectArrayDecoder extends AbstractObjectArrayDecoder {
+  private static final class ArrayAssistantFieldDecoder extends AbstractObjectFieldDecoder {
     private final ArrayAssistant arrayAssistant;
 
-    @SuppressWarnings("unchecked")
-    ArrayAssistantObjectArrayDecoder(ArrayAssistant arrayAssistant) {
-      super(arrayAssistant.baseType());
+    ArrayAssistantFieldDecoder(ArrayAssistant arrayAssistant) {
       this.arrayAssistant = arrayAssistant;
+    }
+
+    @Override
+    public Class<?> baseType() {
+      return arrayAssistant.baseType();
     }
 
     /**
@@ -495,68 +530,84 @@ final class ArrayDecoding {
     }
   }
 
-  private static final class StructTypeArrayDecoder extends AbstractObjectArrayDecoder<Struct[]> {
+  private static final class StructTypeDecoder extends AbstractObjectFieldDecoder<Struct> {
 
     private final String typeName;
 
-    StructTypeArrayDecoder(String typeName) {
-      super(PgStruct.class);
+    StructTypeDecoder(String typeName) {
       this.typeName = typeName;
     }
 
     @Override
-    public Object parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
-      final PgStruct struct = castNonNull(connection.getTypeInfo().getPgStruct(typeName));
-
-      final byte[] structValue = new byte[length];
-      bytes.get(structValue, 0, length);
-
-      final Tuple row = PgResultSet.fromStructBin(structValue);
-
-      return buildStruct(struct, row, connection, true);
+    public Class<Struct> baseType() {
+      return Struct.class;
     }
 
     @Override
-    public Object parseValue(String stringVal, BaseConnection connection) throws SQLException {
-      final PgStruct struct = castNonNull(connection.getTypeInfo().getPgStruct(typeName));
-      final Charset charset = Charset.forName(connection.getEncoding().name());
+    public Struct parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
+      final PgStructDescriptor descriptor = castNonNull(connection.getTypeInfo().getPgStructDescriptor(typeName));
 
-      final Tuple row = PgResultSet.fromStruct(stringVal.getBytes(charset));
+      final byte[] structValue = new byte[length];
+      bytes.get(structValue);
 
-      return buildStruct(struct, row, connection, false);
+      final Tuple row = PgCompositeTypeUtil.fromBytes(structValue, descriptor.pgAttributes().length);
+
+      return buildStruct(descriptor, row, connection, true);
     }
 
-    private Struct buildStruct(PgStruct struct, Tuple row, BaseConnection connection, boolean isBinary) throws SQLException {
-      final Object[] attributes = new Object[struct.getFields().length];
-      for (int i = 0; i < attributes.length; i++) {
-        final PgStructField field = struct.getFields()[i];
-        @SuppressWarnings("rawtypes")
-        final ArrayDecoder decoder = getDecoder(field.getOID(), connection);
-        final byte[] val = row.get(i);
+    @Override
+    public Struct parseValue(String stringVal, BaseConnection connection) throws SQLException {
+      final PgStructDescriptor descriptor = castNonNull(connection.getTypeInfo().getPgStructDescriptor(typeName));
 
-        if (val == null) {
+      final Tuple row = PgCompositeTypeUtil.fromString(stringVal, descriptor.pgAttributes().length);
+
+      return buildStruct(descriptor, row, connection, false);
+    }
+
+    private Struct buildStruct(PgStructDescriptor descriptor, Tuple row, BaseConnection connection, boolean isBinary) throws SQLException {
+      final PgAttribute[] fields = descriptor.pgAttributes();
+      final Object[] attributes = new Object[fields.length];
+      for (int i = 0; i < attributes.length; i++) {
+        final PgAttribute field = fields[i];
+        final byte[] value = row.get(i);
+
+        if (value == null) {
           attributes[i] = null;
           continue;
         }
+
+        @SuppressWarnings("rawtypes")
+        final FieldDecoder decoder = getFieldDecoder(field.oid(), connection);
         if (isBinary) {
-          final ByteBuffer buffer = ByteBuffer.wrap(val);
-          attributes[i] = decoder.parseValue(val.length, buffer, connection);
+          final ByteBuffer buffer = ByteBuffer.wrap(value);
+          attributes[i] = decoder.parseValue(value.length, buffer, connection);
         } else {
-          final Charset charset = Charset.forName(connection.getEncoding().name());
-          attributes[i] = decoder.parseValue(new String(val, charset), connection);
+          String decodedValue;
+          try {
+            decodedValue = connection.getEncoding().decode(value);
+          } catch (IOException e) {
+            throw new PSQLException(GT.tr(
+                "Invalid character data was found.  This is most likely caused by stored data containing characters that are invalid for the character set the database was created in.  The most common example of this is storing 8bit data in a SQL_ASCII database."),
+                PSQLState.DATA_ERROR, e);
+          }
+          attributes[i] = decoder.parseValue(decodedValue, connection);
         }
       }
-      return struct.withAttributes(attributes);
+      return new PgStruct(descriptor, attributes, connection);
     }
   }
 
-  private static final class MappedTypeObjectArrayDecoder extends AbstractObjectArrayDecoder<Object[]> {
+  private static final class MappedTypeObjectDecoder extends AbstractObjectFieldDecoder<Object> {
 
     private final String typeName;
 
-    MappedTypeObjectArrayDecoder(String baseTypeName) {
-      super(Object.class);
-      this.typeName = baseTypeName;
+    MappedTypeObjectDecoder(String typeName) {
+      this.typeName = typeName;
+    }
+
+    @Override
+    public Class<Object> baseType() {
+      return Object.class;
     }
 
     /**
@@ -578,11 +629,18 @@ final class ArrayDecoding {
     }
   }
 
-  @SuppressWarnings("unchecked")
   private static <A extends @NonNull Object> ArrayDecoder<A> getDecoder(int oid, BaseConnection connection) throws SQLException {
+    @SuppressWarnings("rawtypes")
+    final FieldDecoder decoder = getFieldDecoder(oid, connection);
+    //noinspection unchecked
+    return (ArrayDecoder<A>) new ArrayDecoderImpl<>(decoder);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <A extends @NonNull Object> FieldDecoder<A> getFieldDecoder(int oid, BaseConnection connection) throws SQLException {
     final Integer key = oid;
     @SuppressWarnings("rawtypes")
-    final ArrayDecoder decoder = OID_TO_DECODER.get(key);
+    final FieldDecoder decoder = OID_TO_DECODER.get(key);
     if (decoder != null) {
       return decoder;
     }
@@ -590,7 +648,7 @@ final class ArrayDecoding {
     final ArrayAssistant assistant = ArrayAssistantRegistry.getAssistant(oid);
 
     if (assistant != null) {
-      return new ArrayAssistantObjectArrayDecoder(assistant);
+      return new ArrayAssistantFieldDecoder(assistant);
     }
 
     final String typeName = connection.getTypeInfo().getPGType(oid);
@@ -601,11 +659,11 @@ final class ArrayDecoding {
     // 42.2.x should return enums as strings
     int type = connection.getTypeInfo().getSQLType(typeName);
     if (type == Types.CHAR || type == Types.VARCHAR) {
-      return (ArrayDecoder<A>) STRING_ONLY_DECODER;
+      return (FieldDecoder<A>) STRING;
     } else if (type == Types.STRUCT) {
-      return (ArrayDecoder<A>) new StructTypeArrayDecoder(typeName);
+      return (FieldDecoder<A>) new StructTypeDecoder(typeName);
     }
-    return (ArrayDecoder<A>) new MappedTypeObjectArrayDecoder(typeName);
+    return (FieldDecoder<A>) new MappedTypeObjectDecoder(typeName);
   }
 
   /**

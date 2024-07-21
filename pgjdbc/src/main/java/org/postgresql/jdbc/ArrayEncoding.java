@@ -1076,6 +1076,8 @@ final class ArrayEncoding {
             // this should never happen
             throw new IllegalStateException(e);
           }
+        } else if (array[i] instanceof java.sql.Array) {
+          sb.append(array[i]);
         } else {
           PgArray.escapeArrayElement(sb, array[i].toString());
         }

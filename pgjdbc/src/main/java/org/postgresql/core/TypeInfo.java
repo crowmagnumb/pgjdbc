@@ -5,7 +5,7 @@
 
 package org.postgresql.core;
 
-import org.postgresql.jdbc.PgStruct;
+import org.postgresql.jdbc.PgStructDescriptor;
 import org.postgresql.util.PGobject;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -92,7 +92,7 @@ public interface TypeInfo {
 
   @Nullable Class<? extends PGobject> getPGobject(String type);
 
-  @Nullable PgStruct getPgStruct(String type) throws SQLException;
+  @Nullable PgStructDescriptor getPgStructDescriptor(String type) throws SQLException;
 
   String getJavaClass(int oid) throws SQLException;
 

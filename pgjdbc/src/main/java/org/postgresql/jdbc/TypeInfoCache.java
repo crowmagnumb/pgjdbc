@@ -57,10 +57,10 @@ public class TypeInfoCache implements TypeInfo {
 
   // pgname (String) -> extension pgobject (Class)
   private final Map<String, Class<? extends PGobject>> pgNameToPgObject;
-  // pgname (String) -> struct template
-  private final Map<String, PgStruct> pgNameToPgStruct;
-  // oid (Integer) -> struct template
-  private final Map<Integer, PgStruct> pgOidToPgStruct;
+  // pgname (String) -> struct descriptor
+  private final Map<String, PgStructDescriptor> pgNameToPgStructDescriptor;
+  // oid (Integer) -> struct descriptor
+  private final Map<Integer, PgStructDescriptor> pgOidToPgStructDescriptor;
 
   // type array oid -> base type's oid
   private final Map<Integer, Integer> pgArrayToPgType;
@@ -77,7 +77,7 @@ public class TypeInfoCache implements TypeInfo {
   private @Nullable PreparedStatement getArrayElementOidStatement;
   private @Nullable PreparedStatement getArrayDelimiterStatement;
   private @Nullable PreparedStatement getTypeInfoStatement;
-  private @Nullable PreparedStatement getCustomTypeFieldsStatement;
+  private @Nullable PreparedStatement getCustomTypeAttributesStatement;
   private @Nullable PreparedStatement getAllTypeInfoStatement;
   private final ResourceLock lock = new ResourceLock();
 
@@ -169,8 +169,8 @@ public class TypeInfoCache implements TypeInfo {
     pgArrayToPgType = new HashMap<>((int) Math.round(types.length * 1.5));
     arrayOidToDelimiter = new HashMap<>((int) Math.round(types.length * 2.5));
 
-    pgOidToPgStruct = new HashMap<>();
-    pgNameToPgStruct = new HashMap<>();
+    pgOidToPgStructDescriptor = new HashMap<>();
+    pgNameToPgStructDescriptor = new HashMap<>();
 
     // needs to be synchronized because the iterator is returned
     // from getPGTypeNamesWithSQLTypes()
@@ -275,11 +275,11 @@ public class TypeInfoCache implements TypeInfo {
     return sql.toString();
   }
 
-  private String getCustomTypeFieldsQuery() {
+  private String getComplexTypeAttributesQuery() {
     return "         SELECT n.nspname = ANY(current_schemas(true)) as on_path,\n"
         + "                t.typname AS type_name,\n"
-        + "                a.attname::text AS field_name,\n"
-        + "                a.atttypid AS field_data_type,\n"
+        + "                a.attname AS attr_name,\n"
+        + "                a.atttypid AS attr_oid,\n"
         + "                t.oid type_oid,\n"
         + "                t.typarray AS array_oid,\n"
         + "                t.typdelim AS array_delim,\n"
@@ -354,13 +354,13 @@ public class TypeInfoCache implements TypeInfo {
     return getTypeInfoStatement;
   }
 
-  private PreparedStatement prepareGetCustomTypeFieldsStatement() throws SQLException {
-    PreparedStatement getTypeFieldsInfoStatement = this.getCustomTypeFieldsStatement;
-    if (getTypeFieldsInfoStatement == null) {
-      getTypeFieldsInfoStatement = conn.prepareStatement(getCustomTypeFieldsQuery());
-      this.getCustomTypeFieldsStatement = getTypeFieldsInfoStatement;
+  private PreparedStatement prepareGetComplexTypeAttributesStatement() throws SQLException {
+    PreparedStatement getComplexTypeAttributesInfoStatement = this.getCustomTypeAttributesStatement;
+    if (getComplexTypeAttributesInfoStatement == null) {
+      getComplexTypeAttributesInfoStatement = conn.prepareStatement(getComplexTypeAttributesQuery());
+      this.getCustomTypeAttributesStatement = getComplexTypeAttributesInfoStatement;
     }
-    return getTypeFieldsInfoStatement;
+    return getComplexTypeAttributesInfoStatement;
   }
 
   @Override
@@ -432,38 +432,44 @@ public class TypeInfoCache implements TypeInfo {
       rs.close();
 
       if (sqlType == Types.STRUCT) {
-        PreparedStatement getCustomTypeFieldsStatement = prepareGetCustomTypeFieldsStatement();
-        getCustomTypeFieldsStatement.setLong(1, intOidToLong(typeOid));
-        if (!((BaseStatement) getCustomTypeFieldsStatement)
-            .executeWithFlags(QueryExecutor.QUERY_SUPPRESS_BEGIN)) {
-          throw new PSQLException(GT.tr("No results were returned by the query."), PSQLState.NO_DATA);
-        }
-
-        rs = castNonNull(getCustomTypeFieldsStatement.getResultSet());
-
-        ArrayList<PgStructField> structFields = new ArrayList<>();
-        String typeName = null;
-        String arrayDelim = null;
-        while (rs.next()) {
-          typeName = rs.getString("type_name");
-          arrayDelim = rs.getString("array_delim");
-
-          String fieldName = rs.getString("field_name");
-          int fieldDataType = rs.getInt("field_data_type");
-          structFields.add(new PgStructField(fieldName, castNonNull(getPGType(fieldDataType)), fieldDataType));
-        }
-        rs.close();
-
-        if (!structFields.isEmpty()) {
-          PgStruct pgs = new PgStruct(typeName, structFields.toArray(new PgStructField[0]), conn);
-          pgOidToPgStruct.put(typeOid, pgs);
-          pgNameToOid.put(typeName, typeOid);
-          arrayOidToDelimiter.put(typeOid, castNonNull(arrayDelim).charAt(0));
-          pgArrayToPgType.put(typeOid, typeOid);
-        }
+        loadStruct(typeOid);
       }
       oidToSQLType.put(typeOid, sqlType);
       return sqlType;
+    }
+  }
+
+  private void loadStruct(int typeOid) throws SQLException {
+    PreparedStatement getCustomTypeFieldsStatement = prepareGetComplexTypeAttributesStatement();
+    getCustomTypeFieldsStatement.setLong(1, intOidToLong(typeOid));
+    if (!((BaseStatement) getCustomTypeFieldsStatement)
+        .executeWithFlags(QueryExecutor.QUERY_SUPPRESS_BEGIN)) {
+      throw new PSQLException(GT.tr("No results were returned by the query."), PSQLState.NO_DATA);
+    }
+
+    ResultSet rs = castNonNull(getCustomTypeFieldsStatement.getResultSet());
+
+    ArrayList<PgAttribute> pgAttributes = new ArrayList<>();
+    String typeName = null;
+    String arrayDelim = null;
+    while (rs.next()) {
+      if (typeName == null) {
+        typeName = rs.getString("type_name");
+        arrayDelim = rs.getString("array_delim");
+      }
+
+      String attrName = rs.getString("attr_name");
+      int attrOid = rs.getInt("attr_oid");
+      pgAttributes.add(new PgAttribute(attrName, castNonNull(getPGType(attrOid)), attrOid));
+    }
+    rs.close();
+
+    if (!pgAttributes.isEmpty()) {
+      PgStructDescriptor descriptor = new PgStructDescriptor(typeName, pgAttributes.toArray(new PgAttribute[0]));
+      pgOidToPgStructDescriptor.put(typeOid, descriptor);
+      pgNameToOid.put(typeName, typeOid);
+      arrayOidToDelimiter.put(typeOid, castNonNull(arrayDelim).charAt(0));
+      pgArrayToPgType.put(typeOid, typeOid);
     }
   }
 
@@ -824,25 +830,30 @@ public class TypeInfoCache implements TypeInfo {
   }
 
   @Override
-  public @Nullable PgStruct getPgStruct(String type) throws SQLException {
+  public @Nullable PgStructDescriptor getPgStructDescriptor(String type) throws SQLException {
     try (ResourceLock ignore = lock.obtain()) {
-      PgStruct struct = pgNameToPgStruct.get(type);
-      if (struct != null) {
-        return struct;
+      PgStructDescriptor descriptor = pgNameToPgStructDescriptor.get(type);
+      if (descriptor != null) {
+        return descriptor;
       }
 
       int sqlType = getSQLType(type); // loads the type if not already loaded
       assert sqlType == Types.STRUCT : "Could not map " + type + " to a Struct type.";
 
       int oid = pgNameToOid.get(type);
-      PgStruct pgs = pgOidToPgStruct.get(oid);
-      if (pgs == null) {
-        throw new PSQLException(GT.tr("No type mapping for " + type), PSQLState.NO_DATA);
+      descriptor = pgOidToPgStructDescriptor.get(oid);
+      if (descriptor == null) {
+        throw new PSQLException(
+            GT.tr("No type mapping for {0}.", type),
+            PSQLState.NO_DATA);
       }
-      pgs = new PgStruct(type, pgs.getFields(), conn);
-      pgNameToPgStruct.put(type, pgs);
 
-      return pgs;
+      if (!type.equals(descriptor.sqlTypeName())) {
+        descriptor = new PgStructDescriptor(type, descriptor.pgAttributes());
+        pgNameToPgStructDescriptor.put(type, descriptor);
+      }
+
+      return descriptor;
     }
   }
 

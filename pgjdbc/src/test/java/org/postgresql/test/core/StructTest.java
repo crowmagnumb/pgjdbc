@@ -15,7 +15,6 @@ import org.postgresql.test.TestUtil;
 import org.postgresql.test.jdbc2.BaseTest4;
 
 import org.junit.AfterClass;
-import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -33,13 +32,17 @@ import java.util.HashMap;
 import java.util.Properties;
 
 public class StructTest extends BaseTest4 {
+
   @BeforeClass
   public static void beforeAll() throws SQLException {
-    try (Connection con = TestUtil.openDB()) {
+    Properties props = new Properties();
+    try (Connection con = TestUtil.openDB(props)) {
       TestUtil.createCompositeType(con, "inventory_item",
           "name text, supplier_id int, price numeric");
       TestUtil.createCompositeType(con, "inventory_group",
           "name text, item inventory_item, quantity int");
+      TestUtil.createCompositeType(con, "item_2d",
+          "id int, arr inventory_item[][]");
       TestUtil.createCompositeType(con, "nested_struct_item",
           "aint2 int2,"
               + "aint4 int4,"
@@ -63,7 +66,7 @@ public class StructTest extends BaseTest4 {
               + "abytea bytea");
       TestUtil.createTable(con, "nested_structs",
           "A nested_struct_item");
-
+      TestUtil.createTable(con, "item_2d_table", "id int, item item_2d");
       TestUtil.createTable(con, "nested_structs",
           "id int,"
               + "A nested_struct_item");
@@ -78,22 +81,24 @@ public class StructTest extends BaseTest4 {
     try (Connection con = TestUtil.openDB()) {
       TestUtil.dropTable(con, "nested_structs_array");
       TestUtil.dropTable(con, "nested_structs");
+      TestUtil.dropTable(con, "item_2d_table");
       TestUtil.dropType(con, "nested_struct_item");
       TestUtil.dropType(con, "inventory_group");
+      TestUtil.dropType(con, "item_2d");
       TestUtil.dropType(con, "inventory_item");
     }
   }
 
-  @Before
-  public void setUp() throws Exception {
+  @Override
+  protected void updateProperties(Properties props) {
     binaryMode = BinaryMode.FORCE;
-    con = TestUtil.openDB();
+    forceBinary(props);
   }
 
   @Override
   protected void forceBinary(Properties props) {
     PGProperty.PREPARE_THRESHOLD.set(props, -1);
-    PGProperty.BINARY_TRANSFER_ENABLE.set(props, "nested_struct_item");
+    PGProperty.BINARY_TRANSFER_ENABLE.set(props, "item_2d");
   }
 
   @Test
@@ -155,21 +160,23 @@ public class StructTest extends BaseTest4 {
   }
 
   @Test
-  public void createNestedStructBinary() throws SQLException {
-    Struct inventoryItem = con.createStruct("inventory_item", new Object[]{"here", 42, 1.99});
-    Struct inventoryGroup = con.createStruct("inventory_group", new Object[]{1, inventoryItem, 10});
-    Struct nestedStructItem = con.createStruct("nested_struct_item", new Object[]{0, 2, 3, 4, 6, 7, '9', '1', "test", true, '1', new Date(0), new Time(0), new Timestamp(0), new Timestamp(0), inventoryGroup, "{\"a\": 1, \"b\":2}", "(2,2)", "(1,1),(4,3)", new byte[]{65, 65}});
-
-    PreparedStatement ps = con.prepareStatement("INSERT INTO nested_structs VALUES (2, ?)");
-    ps.setObject(1, nestedStructItem);
-    ps.executeUpdate();
+  public void createStructWithInnerArrayBinary() throws SQLException {
+    Struct i1 = con.createStruct("inventory_item", new Object[]{"here a", 42, 1.99});
+    Struct i2 = con.createStruct("inventory_item", new Object[]{"here b", 42, 1.99});
+    Struct i3 = con.createStruct("inventory_item", new Object[]{"here c", 42, 1.99});
+    Array a1 = con.createArrayOf("inventory_item", new Object[] {i1, i2});
+    Array a2 = con.createArrayOf("inventory_item", new Object[] {i3, i3});
+    Struct s = con.createStruct("item_2d", new Object[] {1, con.createArrayOf("inventory_item", new Object[] {a1, a2})});
+    PreparedStatement ps = con.prepareStatement("INSERT INTO item_2d_table VALUES(1, ?)");
+    ps.setObject(1, s);
+    ps.execute();
 
     Statement stmt = con.createStatement();
-    ResultSet rs = stmt.executeQuery("SELECT A FROM nested_structs WHERE Id = 2");
+    ResultSet rs = stmt.executeQuery("SELECT item FROM item_2d_table WHERE id = 1");
 
     assertTrue(rs.next());
-    Struct s = (Struct) rs.getObject(1);
-    assertEquals(nestedStructItem, s);
+    Struct item = (Struct) rs.getObject(1);
+    assertEquals(s, item);
     assertFalse(rs.next());
   }
 }

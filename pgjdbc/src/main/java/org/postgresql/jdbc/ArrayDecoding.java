@@ -335,6 +335,31 @@ final class ArrayDecoding {
     }
   };
 
+  private static final FieldDecoder<String> JSONB_DECODER = new AbstractObjectFieldDecoder<String>() {
+
+    @Override
+    public String parseValue(int length, ByteBuffer bytes, BaseConnection connection) throws SQLException {
+      assert bytes.hasArray();
+      // jsonb has an extra byte 'version' in its binary encoding
+      bytes.get();
+      length -= 1;
+
+      // 42.2.x decodes jsonb array element as String rather than PGobject
+      return STRING.parseValue(length, bytes, connection);
+    }
+
+    @Override
+    public String parseValue(String stringVal, BaseConnection connection) throws SQLException {
+      // 42.2.x decodes jsonb array element as String rather than PGobject
+      return STRING.parseValue(stringVal, connection);
+    }
+
+    @Override
+    public Class<String> baseType() {
+      return String.class;
+    }
+  };
+
   private static final FieldDecoder<byte[]> BYTE_ARRAY = new AbstractObjectFieldDecoder<byte[]>() {
 
     /**
@@ -476,8 +501,7 @@ final class ArrayDecoding {
     OID_TO_DECODER.put(Oid.FLOAT4, FLOAT_OBJ);
     OID_TO_DECODER.put(Oid.TEXT, STRING);
     OID_TO_DECODER.put(Oid.VARCHAR, STRING);
-    // 42.2.x decodes jsonb array element as String rather than PGobject
-    OID_TO_DECODER.put(Oid.JSONB, STRING);
+    OID_TO_DECODER.put(Oid.JSONB, JSONB_DECODER);
     OID_TO_DECODER.put(Oid.BIT, BOOLEAN_OBJ);
     OID_TO_DECODER.put(Oid.BOOL, BOOLEAN_OBJ);
     OID_TO_DECODER.put(Oid.BYTEA, BYTE_ARRAY);

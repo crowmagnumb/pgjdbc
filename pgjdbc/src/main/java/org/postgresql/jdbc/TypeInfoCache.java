@@ -276,14 +276,11 @@ public class TypeInfoCache implements TypeInfo {
   }
 
   private String getComplexTypeAttributesQuery() {
-    return "         SELECT n.nspname = ANY(current_schemas(true)) as on_path,\n"
+    return "         SELECT \n"
         + "                t.typname AS type_name,\n"
         + "                a.attname AS attr_name,\n"
         + "                a.atttypid AS attr_oid,\n"
-        + "                t.oid type_oid,\n"
-        + "                t.typarray AS array_oid,\n"
-        + "                t.typdelim AS array_delim,\n"
-        + "                n.nspname as schema_name\n"
+        + "                t.oid type_oid\n"
         + "         FROM pg_catalog.pg_attribute a\n"
         + "                  JOIN pg_catalog.pg_type t\n"
         + "                       ON a.attrelid = t.typrelid\n"
@@ -440,36 +437,34 @@ public class TypeInfoCache implements TypeInfo {
   }
 
   private void loadStruct(int typeOid) throws SQLException {
-    PreparedStatement getCustomTypeFieldsStatement = prepareGetComplexTypeAttributesStatement();
-    getCustomTypeFieldsStatement.setLong(1, intOidToLong(typeOid));
-    if (!((BaseStatement) getCustomTypeFieldsStatement)
-        .executeWithFlags(QueryExecutor.QUERY_SUPPRESS_BEGIN)) {
-      throw new PSQLException(GT.tr("No results were returned by the query."), PSQLState.NO_DATA);
-    }
-
-    ResultSet rs = castNonNull(getCustomTypeFieldsStatement.getResultSet());
-
-    ArrayList<PgAttribute> pgAttributes = new ArrayList<>();
-    String typeName = null;
-    String arrayDelim = null;
-    while (rs.next()) {
-      if (typeName == null) {
-        typeName = rs.getString("type_name");
-        arrayDelim = rs.getString("array_delim");
+    try (ResourceLock ignore = lock.obtain()) {
+      PreparedStatement getCustomTypeFieldsStatement = prepareGetComplexTypeAttributesStatement();
+      getCustomTypeFieldsStatement.setLong(1, intOidToLong(typeOid));
+      if (!((BaseStatement) getCustomTypeFieldsStatement)
+          .executeWithFlags(QueryExecutor.QUERY_SUPPRESS_BEGIN)) {
+        throw new PSQLException(GT.tr("No results were returned by the query."), PSQLState.NO_DATA);
       }
 
-      String attrName = rs.getString("attr_name");
-      int attrOid = rs.getInt("attr_oid");
-      pgAttributes.add(new PgAttribute(attrName, castNonNull(getPGType(attrOid)), attrOid));
-    }
-    rs.close();
+      ResultSet rs = castNonNull(getCustomTypeFieldsStatement.getResultSet());
 
-    if (!pgAttributes.isEmpty()) {
-      PgStructDescriptor descriptor = new PgStructDescriptor(typeName, pgAttributes.toArray(new PgAttribute[0]));
-      pgOidToPgStructDescriptor.put(typeOid, descriptor);
-      pgNameToOid.put(typeName, typeOid);
-      arrayOidToDelimiter.put(typeOid, castNonNull(arrayDelim).charAt(0));
-      pgArrayToPgType.put(typeOid, typeOid);
+      ArrayList<PgAttribute> pgAttributes = new ArrayList<>();
+      String typeName = null;
+      while (rs.next()) {
+        if (typeName == null) {
+          typeName = rs.getString("type_name");
+        }
+
+        String attrName = rs.getString("attr_name");
+        int attrOid = rs.getInt("attr_oid");
+        pgAttributes.add(new PgAttribute(attrName, castNonNull(getPGType(attrOid)), attrOid));
+      }
+      rs.close();
+
+      if (!pgAttributes.isEmpty()) {
+        PgStructDescriptor descriptor = new PgStructDescriptor(typeName, pgAttributes.toArray(new PgAttribute[0]));
+        pgOidToPgStructDescriptor.put(typeOid, descriptor);
+        pgNameToOid.put(typeName, typeOid);
+      }
     }
   }
 
@@ -711,10 +706,6 @@ public class TypeInfoCache implements TypeInfo {
         return ',';
       }
 
-      if (!oidToSQLType.containsKey(oid)) {
-        getSQLType(oid);
-      }
-
       Character delim = arrayOidToDelimiter.get(oid);
       if (delim != null) {
         return delim;
@@ -762,10 +753,6 @@ public class TypeInfoCache implements TypeInfo {
     try (ResourceLock ignore = lock.obtain()) {
       if (oid == Oid.UNSPECIFIED) {
         return Oid.UNSPECIFIED;
-      }
-
-      if (!oidToSQLType.containsKey(oid)) {
-        getSQLType(oid);
       }
 
       Integer pgType = pgArrayToPgType.get(oid);

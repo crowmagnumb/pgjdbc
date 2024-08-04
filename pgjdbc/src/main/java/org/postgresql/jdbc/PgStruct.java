@@ -8,10 +8,13 @@ package org.postgresql.jdbc;
 import org.postgresql.core.BaseConnection;
 import org.postgresql.core.Oid;
 import org.postgresql.util.GT;
-import org.postgresql.util.PSQLException;
+import org.postgresql.util.PSQLState;
+
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 import java.nio.charset.Charset;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Struct;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -26,6 +29,9 @@ public class PgStruct implements Struct {
 
   private final TimestampUtils timestampUtils;
   private final Charset charset;
+
+  // Record value as string
+  private @Nullable String fieldString;
 
   public PgStruct(PgStructDescriptor descriptor, Object[] attributes, BaseConnection connection) {
     this.sqlTypeName = descriptor.sqlTypeName();
@@ -55,12 +61,11 @@ public class PgStruct implements Struct {
     for (int i = 0; i < attributes.length; i++) {
       String type = descriptor.pgAttributes()[i].typeName();
       Class<?> javaType = map.get(type);
-      if (javaType == null || attributes[i] == null) {
-        // I guess if no type is found in the user mapping, we just return the attribute as is?
+      if (javaType != null && attributes[i] != null) {
+        newAttributes[i] = getAttributeAs(attributes[i], javaType);
+      } else {
         newAttributes[i] = attributes[i];
-        continue;
       }
-      newAttributes[i] = getAttributeAs(attributes[i], javaType);
     }
     return newAttributes;
   }
@@ -88,14 +93,17 @@ public class PgStruct implements Struct {
       case "java.util.Date":
         return timestampUtils.toTimestamp(null, value);
       default:
-        throw new PSQLException(
+        throw new SQLFeatureNotSupportedException(
             GT.tr("Unsupported conversion to {1}.", javaType.getName()),
-            null);
+            PSQLState.NOT_IMPLEMENTED.getState());
     }
   }
 
   @Override
   public String toString() {
+    if (fieldString != null) {
+      return fieldString;
+    }
     PgAttribute[] pgAttributes = descriptor.pgAttributes();
     StringBuilder sb = new StringBuilder();
     sb.append("(");
@@ -130,7 +138,8 @@ public class PgStruct implements Struct {
       }
     }
     sb.append(")");
-    return sb.toString();
+    fieldString = sb.toString();
+    return fieldString;
   }
 
   public static void escapeStructAttribute(StringBuilder b, String s) {

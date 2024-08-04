@@ -121,7 +121,7 @@ public class StructTest extends BaseTest4 {
   public void createNestedStructRaw() throws SQLException {
     Struct inventoryItem = con.createStruct("inventory_item", new Object[]{"here", 42, 1.99});
     Struct inventoryGroup = con.createStruct("inventory_group", new Object[]{1, inventoryItem, 10});
-    Struct nestedStructItem = con.createStruct("nested_struct_item", new Object[]{0, 2, 3, 4, 6, 7, '9', '1', "test", true, '1', new Date(0), new Time(0), new Timestamp(0), new Timestamp(0), inventoryGroup, "{\"a\": 1, \"b\":2}", "(2,2)", "(1,1),(4,3)", new byte[]{65, 65}});
+    Struct nestedStructItem = con.createStruct("nested_struct_item", new Object[]{0, 2, 3, 4, 6.0, 7.0, '9', '1', "test", true, '1', new Date(0), new Time(0), new Timestamp(0), new Timestamp(0), inventoryGroup, "{\"a\": 1, \"b\":2}", "(2.0,2.0)", "(4.0,3.0),(1.0,1.0)", new byte[]{65, 65}});
 
     PreparedStatement pstmt = con.prepareStatement("INSERT INTO nested_structs VALUES (1, ?)");
     pstmt.setObject(1, nestedStructItem);
@@ -132,7 +132,7 @@ public class StructTest extends BaseTest4 {
 
     assertTrue(rs.next());
     Struct s = (Struct) rs.getObject(1);
-    assertEquals(nestedStructItem, s);
+    assertEquals(nestedStructItem.toString(), s.toString());
     assertFalse(rs.next());
   }
 
@@ -140,8 +140,8 @@ public class StructTest extends BaseTest4 {
   public void createArrayOfNestedStructRaw() throws SQLException {
     Struct inventoryItem = con.createStruct("inventory_item", new Object[]{"here", 42, 1.99});
     Struct inventoryGroup = con.createStruct("inventory_group", new Object[]{1, inventoryItem, 10});
-    Struct nestedStructItem1 = con.createStruct("nested_struct_item", new Object[]{0, 2, 3, 4, 6, 7, '9', '1', "test", true, '1', new Date(0), new Time(0), new Timestamp(0), new Timestamp(0), inventoryGroup, "{\"a\": 1, \"b\":2}", "(2,2)", "(1,1),(4,3)", new byte[]{65, 65}});
-    Struct nestedStructItem2 = con.createStruct("nested_struct_item", new Object[]{1, 2, 3, 4, 6, 7, '9', '1', "test", true, '1', new Date(0), new Time(0), new Timestamp(0), new Timestamp(0), inventoryGroup, "{\"a\": 1, \"b\":2}", "(2,2)", "(1,1),(4,3)", new byte[]{65, 65}});
+    Struct nestedStructItem1 = con.createStruct("nested_struct_item", new Object[]{0, 2, 3, 4, 6.0, 7.0, '9', '1', "test", true, '1', new Date(0), new Time(0), new Timestamp(0), new Timestamp(0), inventoryGroup, "{\"a\": 1, \"b\":2}", "(2.0,2.0)", "(4.0,3.0),(1.0,1.0)", new byte[]{65, 65}});
+    Struct nestedStructItem2 = con.createStruct("nested_struct_item", new Object[]{1, 2, 3, 4, 6.0, 7.0, '9', '1', "test", true, '1', new Date(0), new Time(0), new Timestamp(0), new Timestamp(0), inventoryGroup, "{\"a\": 1, \"b\":2}", "(2.0,2.0)", "(4.0,3.0),(1.0,1.0)", new byte[]{65, 65}});
 
     Array array = con.createArrayOf("nested_struct_item", new Object[]{nestedStructItem1, nestedStructItem2});
 
@@ -154,8 +154,8 @@ public class StructTest extends BaseTest4 {
 
     assertTrue(rs.next());
     Array a = rs.getArray(1);
-    assertEquals(nestedStructItem1, ((Struct[]) a.getArray())[0]);
-    assertEquals(nestedStructItem2, ((Struct[]) a.getArray())[1]);
+    assertEquals(nestedStructItem1.toString(), ((Struct[]) a.getArray())[0].toString());
+    assertEquals(nestedStructItem2.toString(), ((Struct[]) a.getArray())[1].toString());
     assertFalse(rs.next());
   }
 

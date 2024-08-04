@@ -97,7 +97,7 @@ class CompositeTest {
     ResultSet rs = pstmt.executeQuery();
     assertTrue(rs.next());
     Struct s2 = (Struct) rs.getObject(1);
-    assertEquals(s, s2);
+    assertEquals(s.toString(), s2.toString());
   }
 
   @Test

@@ -13,9 +13,7 @@ import org.postgresql.util.PSQLException;
 import java.nio.charset.Charset;
 import java.sql.SQLException;
 import java.sql.Struct;
-import java.util.Arrays;
 import java.util.Map;
-import java.util.Objects;
 import java.util.regex.Pattern;
 
 public class PgStruct implements Struct {
@@ -35,29 +33,6 @@ public class PgStruct implements Struct {
     this.attributes = attributes;
     this.timestampUtils = connection.getTimestampUtils();
     this.charset = Charset.forName(connection.getQueryExecutor().getEncoding().name());
-    resolveAttributes();
-  }
-
-  private void resolveAttributes() {
-    for (int i = 0; i < attributes.length; i++) {
-      if (attributes[i] == null) {
-        continue;
-      }
-      try {
-        int oid = descriptor.pgAttributes()[i].oid();
-        if (oid == Oid.DATE) {
-          attributes[i] = timestampUtils.toDate(timestampUtils.getSharedCalendar(null), attributes[i].toString());
-        } else if (oid == Oid.TIME) {
-          attributes[i] = timestampUtils.toTime(timestampUtils.getSharedCalendar(null), attributes[i].toString());
-        } else if (oid == Oid.TIMESTAMP || oid == Oid.TIMESTAMPTZ) {
-          attributes[i] = timestampUtils.toTimestamp(timestampUtils.getSharedCalendar(null), attributes[i].toString());
-        } else {
-          attributes[i] = JavaObjectResolver.tryResolveObject(attributes[i], oid);
-        }
-      } catch (SQLException ignored) {
-        // skip date time conversions that fail
-      }
-    }
   }
 
   @Override
@@ -169,22 +144,5 @@ public class PgStruct implements Struct {
       b.append(c);
     }
     b.append('"');
-  }
-
-  @Override
-  public boolean equals(Object o) {
-    if (this == o) {
-      return true;
-    }
-    if (o == null || getClass() != o.getClass()) {
-      return false;
-    }
-    PgStruct pgStruct = (PgStruct) o;
-    return Objects.equals(sqlTypeName, pgStruct.sqlTypeName) && Objects.deepEquals(attributes, pgStruct.attributes);
-  }
-
-  @Override
-  public int hashCode() {
-    return Objects.hash(sqlTypeName, Arrays.hashCode(attributes));
   }
 }

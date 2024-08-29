@@ -456,12 +456,12 @@ public class TypeInfoCache implements TypeInfo {
 
         String attrName = rs.getString("attr_name");
         int attrOid = rs.getInt("attr_oid");
-        pgAttributes.add(new PgAttribute(attrName, castNonNull(getPGType(attrOid)), attrOid));
+        pgAttributes.add(new PgAttribute(castNonNull(attrName), castNonNull(getPGType(attrOid)), attrOid));
       }
       rs.close();
 
       if (!pgAttributes.isEmpty()) {
-        PgStructDescriptor descriptor = new PgStructDescriptor(typeName, pgAttributes.toArray(new PgAttribute[0]));
+        PgStructDescriptor descriptor = new PgStructDescriptor(castNonNull(typeName), pgAttributes.toArray(new PgAttribute[0]));
         pgOidToPgStructDescriptor.put(typeOid, descriptor);
         pgNameToOid.put(typeName, typeOid);
       }
@@ -827,9 +827,8 @@ public class TypeInfoCache implements TypeInfo {
       int sqlType = getSQLType(type); // loads the type if not already loaded
       assert sqlType == Types.STRUCT : "Could not map " + type + " to a Struct type.";
 
-      int oid = pgNameToOid.get(type);
-      descriptor = pgOidToPgStructDescriptor.get(oid);
-      if (descriptor == null) {
+      Integer oid = pgNameToOid.get(type);
+      if (oid == null || (descriptor = pgOidToPgStructDescriptor.get(oid)) == null) {
         throw new PSQLException(
             GT.tr("No type mapping for {0}.", type),
             PSQLState.NO_DATA);

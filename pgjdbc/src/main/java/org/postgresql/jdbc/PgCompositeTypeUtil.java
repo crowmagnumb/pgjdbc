@@ -5,10 +5,14 @@
 
 package org.postgresql.jdbc;
 
+import static org.postgresql.util.internal.Nullness.castNonNull;
+
 import org.postgresql.core.Tuple;
 import org.postgresql.util.GT;
 import org.postgresql.util.PSQLException;
 import org.postgresql.util.PSQLState;
+
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -39,7 +43,7 @@ public final class PgCompositeTypeUtil {
     }
     it.next();
 
-    byte[][] columnValues = new byte[nColumns][];
+    byte[] @Nullable [] columnValues = new byte[nColumns][];
     ByteArrayOutputStream buffer = new ByteArrayOutputStream();
 
     boolean needComma = false;
@@ -122,7 +126,7 @@ public final class PgCompositeTypeUtil {
       );
     }
 
-    byte[][] data = new byte[numberOfColumns][];
+    byte[] @Nullable [] data = new byte[numberOfColumns][];
     int i;
     for (i = 0; i < nColumns && buffer.hasRemaining(); i++) {
       ensureRemainingBuffer(buffer, 4, String.format("Failed to read OID for column at position %d", i));
@@ -135,7 +139,7 @@ public final class PgCompositeTypeUtil {
       }
       data[i] = new byte[len];
       ensureRemainingBuffer(buffer, len, String.format("Failed to read data for column at position %d", i));
-      buffer.get(data[i]);
+      buffer.get(castNonNull(data[i]));
     }
 
     if (i < nColumns) {

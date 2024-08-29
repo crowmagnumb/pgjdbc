@@ -203,9 +203,6 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
 
   @RequiresNonNull({"currentRow"})
   protected @Nullable Object internalGetObject(@Positive int columnIndex, Field field) throws SQLException {
-    Tuple thisRow = currentRow.row().orElse(null);
-    castNonNull(thisRow);
-
     int sqlType = getSQLType(columnIndex);
     switch (sqlType) {
       case Types.BOOLEAN:
@@ -279,6 +276,8 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
 
         if ("uuid".equals(type)) {
           if (isBinary(columnIndex)) {
+            Tuple thisRow = currentRow.row().orElse(null);
+            castNonNull(thisRow);
             return getUUID(castNonNull(thisRow.get(columnIndex - 1)));
           }
           return getUUID(castNonNull(getString(columnIndex)));
@@ -314,6 +313,8 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
         }
         if ("hstore".equals(type)) {
           if (isBinary(columnIndex)) {
+            Tuple thisRow = currentRow.row().orElse(null);
+            castNonNull(thisRow);
             return HStoreConverter.fromBytes(castNonNull(thisRow.get(columnIndex - 1)),
                 connection.getEncoding());
           }
@@ -425,11 +426,11 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
     return getArray(findColumn(colName));
   }
 
-  protected Array makeArray(int oid, byte[] value) throws SQLException {
+  protected Array makeArray(int oid, byte @Nullable [] value) throws SQLException {
     return new PgArray(connection, oid, value);
   }
 
-  protected Array makeArray(int oid, String value) throws SQLException {
+  protected Array makeArray(int oid, @Nullable String value) throws SQLException {
     return new PgArray(connection, oid, value);
   }
 
@@ -504,7 +505,7 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
     Tuple structRow = isBinary ? PgCompositeTypeUtil.fromBytes(value, len) :
         PgCompositeTypeUtil.fromString(castNonNull(getString(i)), len);
 
-    Object[] attributes = new Object[len];
+    @Nullable Object[] attributes = new Object[len];
     try (CurrentRow.CurrentRowLock lock = currentRow.switchTo(newFields, structRow)) {
       for (int j = 0; j < len; j++) {
         PgAttribute attr = pgAttributes[j];
@@ -3338,7 +3339,7 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
    * @return raw value or null
    * @throws SQLException If state or column is invalid.
    */
-  @EnsuresNonNull("thisRow")
+  @EnsuresNonNull("currentRow")
   protected byte @Nullable [] getRawValue(@Positive int column) throws SQLException {
     checkClosed();
     Tuple row = currentRow.row().orElse(null);
@@ -4436,11 +4437,11 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
 
     Field[] fields() {
       try (ResourceLock l = lock.obtain()) {
-        return fieldsStack.peek();
+        return castNonNull(fieldsStack.peek());
       }
     }
 
-    void setRow(@Nullable final Tuple row) {
+    void setRow(@Nullable Tuple row) {
       try (ResourceLock l = lock.obtain()) {
         if (!rowStack.isEmpty()) {
           rowStack.pop();
@@ -4466,7 +4467,7 @@ public class PgResultSet implements ResultSet, PGRefCursorResultSet {
     private static final class CurrentRowLock implements AutoCloseable {
       private final CurrentRow currentRow;
 
-      CurrentRowLock(final CurrentRow currentRow) {
+      CurrentRowLock(CurrentRow currentRow) {
         this.currentRow = currentRow;
       }
 

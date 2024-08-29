@@ -5,6 +5,8 @@
 
 package org.postgresql.jdbc;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+
 import java.util.Arrays;
 import java.util.Objects;
 
@@ -35,7 +37,7 @@ public final class PgStructDescriptor {
   }
 
   @Override
-  public boolean equals(Object o) {
+  public boolean equals(@Nullable Object o) {
     if (this == o) {
       return true;
     }

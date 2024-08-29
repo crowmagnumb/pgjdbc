@@ -5,6 +5,8 @@
 
 package org.postgresql.jdbc;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+
 import java.util.Objects;
 
 public final class PgAttribute {
@@ -40,7 +42,7 @@ public final class PgAttribute {
   }
 
   @Override
-  public boolean equals(Object o) {
+  public boolean equals(@Nullable Object o) {
     if (this == o) {
       return true;
     }

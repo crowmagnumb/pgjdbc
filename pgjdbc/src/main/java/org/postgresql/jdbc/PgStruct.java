@@ -25,7 +25,7 @@ public class PgStruct implements Struct {
 
   private final String sqlTypeName;
   private final PgStructDescriptor descriptor;
-  private final Object[] attributes;
+  private final @Nullable Object[] attributes;
 
   private final TimestampUtils timestampUtils;
   private final Charset charset;
@@ -33,7 +33,7 @@ public class PgStruct implements Struct {
   // Record value as string
   private @Nullable String fieldString;
 
-  public PgStruct(PgStructDescriptor descriptor, Object[] attributes, BaseConnection connection) {
+  public PgStruct(PgStructDescriptor descriptor, @Nullable Object[] attributes, BaseConnection connection) {
     this.sqlTypeName = descriptor.sqlTypeName();
     this.descriptor = descriptor;
     this.attributes = attributes;
@@ -46,8 +46,9 @@ public class PgStruct implements Struct {
     return sqlTypeName;
   }
 
+  @SuppressWarnings("override.return")
   @Override
-  public Object[] getAttributes() {
+  public @Nullable Object[] getAttributes() {
     return attributes;
   }
 
@@ -59,12 +60,16 @@ public class PgStruct implements Struct {
   public Object[] getAttributes(Map<String, Class<?>> map) throws SQLException {
     Object[] newAttributes = new Object[attributes.length];
     for (int i = 0; i < attributes.length; i++) {
+      Object attribute = attributes[i];
+      if (attribute == null) {
+        continue;
+      }
       String type = descriptor.pgAttributes()[i].typeName();
       Class<?> javaType = map.get(type);
-      if (javaType != null && attributes[i] != null) {
-        newAttributes[i] = getAttributeAs(attributes[i], javaType);
+      if (javaType != null) {
+        newAttributes[i] = getAttributeAs(attribute, javaType);
       } else {
-        newAttributes[i] = attributes[i];
+        newAttributes[i] = attribute;
       }
     }
     return newAttributes;
@@ -108,7 +113,8 @@ public class PgStruct implements Struct {
     StringBuilder sb = new StringBuilder();
     sb.append("(");
     for (int i = 0; i < pgAttributes.length; i++) {
-      if (attributes[i] == null || attributes[i].toString() == null) {
+      Object attribute = attributes[i];
+      if (attribute == null || attributes.toString() == null) {
         if (i < pgAttributes.length - 1) {
           sb.append(",");
         }
@@ -118,12 +124,12 @@ public class PgStruct implements Struct {
       int oid = pgAttributes[i].oid();
 
       String s;
-      if (oid == Oid.BYTEA && attributes[i] instanceof byte[]) {
-        s = new String((byte[]) attributes[i], charset);
-      } else if (oid == Oid.BIT && attributes[i] instanceof Boolean) {
-        s = ((Boolean) attributes[i]) ? "1" : "0";
+      if (oid == Oid.BYTEA && attribute instanceof byte[]) {
+        s = new String((byte[]) attribute, charset);
+      } else if (oid == Oid.BIT && attribute instanceof Boolean) {
+        s = ((Boolean) attribute) ? "1" : "0";
       } else {
-        s = attributes[i].toString();
+        s = attribute.toString();
       }
 
       boolean needsEscape = NEEDS_ESCAPE_PATTERN.matcher(s).find();

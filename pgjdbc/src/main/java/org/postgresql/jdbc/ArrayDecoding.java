@@ -590,7 +590,7 @@ final class ArrayDecoding {
 
     private Struct buildStruct(PgStructDescriptor descriptor, Tuple row, BaseConnection connection, boolean isBinary) throws SQLException {
       final PgAttribute[] fields = descriptor.pgAttributes();
-      final Object[] attributes = new Object[fields.length];
+      final @Nullable Object[] attributes = new Object[fields.length];
       for (int i = 0; i < attributes.length; i++) {
         final PgAttribute field = fields[i];
         final byte[] value = row.get(i);
